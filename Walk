@@ -1,11 +1,21 @@
+--[[
+    Universal Memory-Based Walking Library
+    Version: 1.0.0
+    
+    Loadstring:
+    local WalkLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/celexh/front-lines/refs/heads/main/Walk"))()
+]]
+
 local WalkLib = {}
+
+-- Memory offsets for Humanoid walking
 local OFFSETS = {
     WALKTOPOINT_1 = 0x16C,
     DIRECTION = 0x170,
     WALKTOPOINT_2 = 0x17C
 }
 
-
+-- Walking state
 local state = {
     isWalking = false,
     currentTarget = nil,
@@ -14,17 +24,20 @@ local state = {
     updateThread = nil
 }
 
-
+-- Helper: Write Vector3 to memory
 local function WriteVector3(address, offset, vector3)
     if not address then return false end
+    
     local success = pcall(function()
         memory_write("float", address + offset, vector3.X)
         memory_write("float", address + offset + 4, vector3.Y)
         memory_write("float", address + offset + 8, vector3.Z)
     end)
+    
     return success
 end
 
+-- Helper: Get position from part/CFrame
 local function GetPosition(part)
     local pos = part.Position
     if type(pos) == "userdata" then
@@ -35,12 +48,14 @@ local function GetPosition(part)
     return nil, nil, nil
 end
 
+-- Helper: Calculate distance (2D, ignoring Y)
 local function GetDistance2D(pos1, pos2)
     local dx = pos2.X - pos1.X
     local dz = pos2.Z - pos1.Z
     return math.sqrt(dx * dx + dz * dz)
 end
 
+-- Helper: Calculate direction vector
 local function GetDirection(from, to)
     local dx = to.X - from.X
     local dy = to.Y - from.Y
@@ -50,9 +65,11 @@ local function GetDirection(from, to)
     if distance == 0 then
         return Vector3.new(0, 0, 0)
     end
+    
     return Vector3.new(dx / distance, dy / distance, dz / distance)
 end
 
+-- Main: Walk to a position
 function WalkLib:WalkTo(targetPosition)
     local player = game.Players.LocalPlayer
     local character = player.Character
@@ -85,10 +102,7 @@ function WalkLib:WalkTo(targetPosition)
         return false
     end
     
-    local direction = GetDirection(
-        Vector3.new(posX, posY, posZ),
-        targetPosition
-    )
+    local direction = GetDirection(Vector3.new(posX, posY, posZ), targetPosition)
     
     local humAddress = humanoid.Address
     WriteVector3(humAddress, OFFSETS.WALKTOPOINT_1, targetPosition)
@@ -103,30 +117,24 @@ function WalkLib:WalkTo(targetPosition)
         while state.isWalking do
             local hrp = state.character:FindFirstChild("HumanoidRootPart")
             if not hrp then
-                self:Stop()
+                WalkLib:Stop()
                 break
             end
             
             local posX, posY, posZ = GetPosition(hrp)
             if not posX then
-                self:Stop()
+                WalkLib:Stop()
                 break
             end
             
-            local distance = GetDistance2D(
-                Vector3.new(posX, posY, posZ),
-                state.currentTarget
-            )
+            local distance = GetDistance2D(Vector3.new(posX, posY, posZ), state.currentTarget)
             
             if distance < 5 then
-                self:Stop()
+                WalkLib:Stop()
                 break
             end
             
-            local direction = GetDirection(
-                Vector3.new(posX, posY, posZ),
-                state.currentTarget
-            )
+            local direction = GetDirection(Vector3.new(posX, posY, posZ), state.currentTarget)
             
             WriteVector3(humAddress, OFFSETS.WALKTOPOINT_1, state.currentTarget)
             WriteVector3(humAddress, OFFSETS.DIRECTION, direction)
@@ -167,14 +175,17 @@ function WalkLib:WalkToNearest(parts)
         warn("[WalkLib] No parts provided")
         return false
     end
-
+    
     local player = game.Players.LocalPlayer
     local character = player.Character
     if not character then return false end
+    
     local hrp = character:FindFirstChild("HumanoidRootPart")
     if not hrp then return false end
+    
     local closestPart = nil
     local closestDistance = math.huge
+    
     for _, part in ipairs(parts) do
         if part and part.Position then
             local distance = GetDistance2D(hrp.Position, part.Position)
@@ -236,7 +247,6 @@ function WalkLib:WaitForArrival(timeout, threshold)
     if not hrp then return false end
     
     while self:IsWalking() do
-        -- Check timeout
         if os.clock() - startTime > timeout then
             warn("[WalkLib] Walk timeout")
             self:Stop()
