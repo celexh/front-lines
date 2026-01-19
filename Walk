@@ -1,0 +1,330 @@
+local WalkLib = {}
+local OFFSETS = {
+    WALKTOPOINT_1 = 0x16C,
+    DIRECTION = 0x170,
+    WALKTOPOINT_2 = 0x17C
+}
+
+
+local state = {
+    isWalking = false,
+    currentTarget = nil,
+    humanoid = nil,
+    character = nil,
+    updateThread = nil
+}
+
+
+local function WriteVector3(address, offset, vector3)
+    if not address then return false end
+    local success = pcall(function()
+        memory_write("float", address + offset, vector3.X)
+        memory_write("float", address + offset + 4, vector3.Y)
+        memory_write("float", address + offset + 8, vector3.Z)
+    end)
+    return success
+end
+
+local function GetPosition(part)
+    local pos = part.Position
+    if type(pos) == "userdata" then
+        return pos.X or pos.x, pos.Y or pos.y, pos.Z or pos.z
+    elseif type(pos) == "table" then
+        return pos.X or pos.x, pos.Y or pos.y, pos.Z or pos.z
+    end
+    return nil, nil, nil
+end
+
+local function GetDistance2D(pos1, pos2)
+    local dx = pos2.X - pos1.X
+    local dz = pos2.Z - pos1.Z
+    return math.sqrt(dx * dx + dz * dz)
+end
+
+local function GetDirection(from, to)
+    local dx = to.X - from.X
+    local dy = to.Y - from.Y
+    local dz = to.Z - from.Z
+    local distance = math.sqrt(dx * dx + dy * dy + dz * dz)
+    
+    if distance == 0 then
+        return Vector3.new(0, 0, 0)
+    end
+    return Vector3.new(dx / distance, dy / distance, dz / distance)
+end
+
+function WalkLib:WalkTo(targetPosition)
+    local player = game.Players.LocalPlayer
+    local character = player.Character
+    
+    if not character then
+        warn("[WalkLib] No character found")
+        return false
+    end
+    
+    local humanoid = character:FindFirstChild("Humanoid")
+    if not humanoid or not humanoid.Address then
+        warn("[WalkLib] Invalid humanoid")
+        return false
+    end
+    
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then
+        warn("[WalkLib] No HumanoidRootPart")
+        return false
+    end
+    
+    state.humanoid = humanoid
+    state.character = character
+    state.currentTarget = targetPosition
+    state.isWalking = true
+    
+    local posX, posY, posZ = GetPosition(hrp)
+    if not posX then
+        warn("[WalkLib] Can't get position")
+        return false
+    end
+    
+    local direction = GetDirection(
+        Vector3.new(posX, posY, posZ),
+        targetPosition
+    )
+    
+    local humAddress = humanoid.Address
+    WriteVector3(humAddress, OFFSETS.WALKTOPOINT_1, targetPosition)
+    WriteVector3(humAddress, OFFSETS.DIRECTION, direction)
+    WriteVector3(humAddress, OFFSETS.WALKTOPOINT_2, targetPosition)
+    
+    if state.updateThread then
+        state.updateThread = nil
+    end
+    
+    state.updateThread = task.spawn(function()
+        while state.isWalking do
+            local hrp = state.character:FindFirstChild("HumanoidRootPart")
+            if not hrp then
+                self:Stop()
+                break
+            end
+            
+            local posX, posY, posZ = GetPosition(hrp)
+            if not posX then
+                self:Stop()
+                break
+            end
+            
+            local distance = GetDistance2D(
+                Vector3.new(posX, posY, posZ),
+                state.currentTarget
+            )
+            
+            if distance < 5 then
+                self:Stop()
+                break
+            end
+            
+            local direction = GetDirection(
+                Vector3.new(posX, posY, posZ),
+                state.currentTarget
+            )
+            
+            WriteVector3(humAddress, OFFSETS.WALKTOPOINT_1, state.currentTarget)
+            WriteVector3(humAddress, OFFSETS.DIRECTION, direction)
+            WriteVector3(humAddress, OFFSETS.WALKTOPOINT_2, state.currentTarget)
+            
+            task.wait(0.1)
+        end
+    end)
+    
+    return true
+end
+
+function WalkLib:WalkToPart(part)
+    if not part or not part.Position then
+        warn("[WalkLib] Invalid part")
+        return false
+    end
+    return self:WalkTo(part.Position)
+end
+
+function WalkLib:WalkToModel(model)
+    if not model then
+        warn("[WalkLib] Invalid model")
+        return false
+    end
+    
+    local targetPart = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
+    if not targetPart then
+        warn("[WalkLib] Model has no parts")
+        return false
+    end
+    
+    return self:WalkTo(targetPart.Position)
+end
+
+function WalkLib:WalkToNearest(parts)
+    if not parts or #parts == 0 then
+        warn("[WalkLib] No parts provided")
+        return false
+    end
+
+    local player = game.Players.LocalPlayer
+    local character = player.Character
+    if not character then return false end
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    local closestPart = nil
+    local closestDistance = math.huge
+    for _, part in ipairs(parts) do
+        if part and part.Position then
+            local distance = GetDistance2D(hrp.Position, part.Position)
+            if distance < closestDistance then
+                closestDistance = distance
+                closestPart = part
+            end
+        end
+    end
+    
+    if closestPart then
+        return self:WalkTo(closestPart.Position)
+    end
+    
+    return false
+end
+
+function WalkLib:WalkToOffset(targetPosition, offset)
+    offset = offset or Vector3.new(0, 0, 0)
+    local finalPos = Vector3.new(
+        targetPosition.X + offset.X,
+        targetPosition.Y + offset.Y,
+        targetPosition.Z + offset.Z
+    )
+    return self:WalkTo(finalPos)
+end
+
+function WalkLib:Stop()
+    state.isWalking = false
+    
+    if state.humanoid and state.humanoid.Address then
+        local humAddress = state.humanoid.Address
+        local zero = Vector3.new(0, 0, 0)
+        
+        WriteVector3(humAddress, OFFSETS.WALKTOPOINT_1, zero)
+        WriteVector3(humAddress, OFFSETS.DIRECTION, zero)
+        WriteVector3(humAddress, OFFSETS.WALKTOPOINT_2, zero)
+    end
+    
+    state.currentTarget = nil
+    state.updateThread = nil
+end
+
+function WalkLib:IsWalking()
+    return state.isWalking
+end
+
+function WalkLib:WaitForArrival(timeout, threshold)
+    timeout = timeout or 30
+    threshold = threshold or 5
+    
+    local startTime = os.clock()
+    local player = game.Players.LocalPlayer
+    local character = player.Character
+    
+    if not character then return false end
+    
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    
+    while self:IsWalking() do
+        -- Check timeout
+        if os.clock() - startTime > timeout then
+            warn("[WalkLib] Walk timeout")
+            self:Stop()
+            return false
+        end
+        
+        if state.currentTarget then
+            local hrpPos = hrp.Position
+            local distance = GetDistance2D(hrpPos, state.currentTarget)
+            
+            if distance < threshold then
+                self:Stop()
+                return true
+            end
+        end
+        
+        task.wait(0.1)
+    end
+    
+    return true
+end
+
+function WalkLib:GetDistanceToTarget()
+    if not state.currentTarget then return nil end
+    
+    local player = game.Players.LocalPlayer
+    local character = player.Character
+    if not character then return nil end
+    
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+    
+    return GetDistance2D(hrp.Position, state.currentTarget)
+end
+
+function WalkLib:GetDistanceTo(position)
+    local player = game.Players.LocalPlayer
+    local character = player.Character
+    if not character then return nil end
+    
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+    
+    return GetDistance2D(hrp.Position, position)
+end
+
+function WalkLib:GetPosition()
+    local player = game.Players.LocalPlayer
+    local character = player.Character
+    if not character then return nil end
+    
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+    
+    return hrp.Position
+end
+
+function WalkLib:IsInRange(position, range)
+    local distance = self:GetDistanceTo(position)
+    if not distance then return false end
+    return distance <= range
+end
+
+function WalkLib:WalkAndWait(targetPosition, timeout, threshold)
+    if self:WalkTo(targetPosition) then
+        return self:WaitForArrival(timeout, threshold)
+    end
+    return false
+end
+
+function WalkLib:GetTarget()
+    return state.currentTarget
+end
+
+function WalkLib:GetState()
+    return {
+        isWalking = state.isWalking,
+        target = state.currentTarget,
+        hasHumanoid = state.humanoid ~= nil,
+        hasCharacter = state.character ~= nil,
+        distanceToTarget = self:GetDistanceToTarget()
+    }
+end
+
+function WalkLib:SetOffsets(walktopoint1, direction, walktopoint2)
+    OFFSETS.WALKTOPOINT_1 = walktopoint1 or OFFSETS.WALKTOPOINT_1
+    OFFSETS.DIRECTION = direction or OFFSETS.DIRECTION
+    OFFSETS.WALKTOPOINT_2 = walktopoint2 or OFFSETS.WALKTOPOINT_2
+end
+
+return WalkLib
